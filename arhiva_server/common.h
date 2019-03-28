@@ -1,4 +1,5 @@
 
+
 /**
  * @file common.h
  * @author OSUE Team <osue-team@cps.tuwien.ac.at>
@@ -37,19 +38,6 @@
 
 #include <stdint.h>
 
-#define shared_mem_name	"/11724463server"	// name of the shared memory
-#define SEM_1 "/11724463sem1"	//name of semaphore 1
-#define SEM_2 "/11724463sem2"	
-#define SEM_3 "/11724463sem3"
-struct shared_memory {
-unsigned int client;
-char data[max];
-char option;
-char sequence[max];
-int start;//start position for sequence
-pid_t server_pid;
-};
-//server
 /**
  * @brief Print a map showing the squares where ships have been hit.
  *

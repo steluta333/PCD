@@ -17,6 +17,9 @@
 #include <limits.h>
 #include <ctype.h>
 
+
+
+
 // Assertions, errors, signals:
 #include <assert.h>
 #include <errno.h>
@@ -28,11 +31,15 @@
 // Sockets, TCP, ... :
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <netdb.h>
 #include <fcntl.h>
 
 // stuff shared by client and server:
 #include "common.h"
+//int remaining_moves[MAX_CLIENTS+1]; //how many moves the client i is still allowed to do
+
 int game_matrix[10][10];
 // Static variables for things you might want to access from several functions:
 static const char *port = DEFAULT_PORT; // the port to bind to
@@ -42,8 +49,9 @@ static const char *host_name=DEFAULT_HOST; //the host
 // Static variables for resources that should be freed before exiting:
 static struct addrinfo *ai = NULL;      // addrinfo struct
 static int sockfd = -1;                 // socket file descriptor
-static int connfd = -1;                 // connection file descriptor
+//static int connfd = -1;                 // connection file descriptor
 
+int maxfd = 1;
 /**
 *@brief: This function prints the usage of the program and
 *it's called in case of a wrong usage
@@ -379,7 +387,7 @@ int main(int argc, char *argv[])
     }
     printf("\n");*/
 
-
+	
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
@@ -417,9 +425,90 @@ int main(int argc, char *argv[])
         fprintf(stderr,"Listening error\n");
         exit(EXIT_FAILURE);
     }
+	int new;
+	int nready; //nr of sockets in list
+	fd_set master,copy; //list of file descriptors for the socket
+	FD_ZERO(&master); //clears the master list
+	FD_ZERO(&copy);
+	FD_SET(sockfd, &master) ;//adds the server socket file descriptor to the list
+	maxfd = sockfd;
+	while(true){
+		memcpy(&copy, &master, sizeof(master));		// copy is "copy" the info from master
+		printf("running select()\n");
+		nready = select(maxfd+1, &copy, NULL, NULL, NULL);
+		if(nready == -1){
+			fprintf(stderr, "Error return of select()\n");
+			exit(EXIT_FAILURE);
+		}
+		printf("Nr of ready descriptor %d\n", nready);
+		for(int i = 0; i<=maxfd && nready>0; i++){ //iterate through file descriptors
 
+			if(FD_ISSET(i, &copy)){ // if the file descriptor is in the set
+				nready-=1;
+				if(i ==sockfd){
+					printf("Trying to accept() new connection(s)\n");
+					new = accept(sockfd, NULL, NULL); //returns the file descriptor of the first client in queue
+					if(new == -1){
+						fprintf(stderr, "Accepting a new client failed\n");
+						exit(EXIT_FAILURE);
+					}
+					else{
+						if (-1 == (fcntl(new, F_SETFD, O_NONBLOCK))){
+							fprintf(stderr, "fcntl stuff\n");
+							exit(EXIT_FAILURE);
+						}
+						FD_SET(new, &master); //add new descriptor in master list
+						if(maxfd<new){
+							maxfd = new;
+						}
+					}
+					
+				}
+				else{
+					printf("recv() data from one of descriptors(s)\n");
+					char buffer; //bufer where we write the messages and where we store the messages to send
+    				int bytes_received=0; //will take the value of bits received by rcv()
+    				int coordinates_sum; //line*10+colomn
+   					int hit;//hit tells the client if a ship has been hit and also tells if it has been sunk.
+   					int status=0; //status 0=game running
+					bytes_received=recv(i,&buffer,1,0);
+       				if(bytes_received==-1){
+            			fprintf(stderr,"Conection error\n");
+           				 exit(EXIT_FAILURE);
+        			}
+					if(check_parity(buffer)==0){
+         			   status=2; // Error: The last message contained an invalid parity bit
+        			}
+        			coordinates_sum=check_valid_coordinates(buffer);
+        			if(coordinates_sum==-1){ //3-Error: The last message contained an invalid coordinate
+            			status=3;
+        			}
+        			hit=check_ship_hit(coordinates_sum,game_matrix,ship_status);
+        			if(hit==3 ){ //adauga conditie pt nr maxim de mutari
+            			status=1; // if the las ship was sunk, or it was the last round, status= game over
+						
+        			}
+        			buffer=create_message_to_send(status,hit);
+        			//printf("Message to be sent by server %d\n",buffer);
+       				int written_bits=write(i,&buffer,sizeof(buffer));
+        			if(written_bits==-1){
+            			fprintf(stderr,"Could not write in the socket\n");
+            			exit(EXIT_FAILURE);
+        			}
+					if(status == 1){
+						close(i);
+						FD_CLR(i, &master);
+					}
+					
+				}
+					
+			}
+		
+		}
+	}	
 
-    connfd = accept(sockfd, NULL, NULL);
+	return 0;
+   /* connfd = accept(sockfd, NULL, NULL);
     if(connfd==-1){
         fprintf(stderr,"Accepting error\n");
         exit(EXIT_FAILURE);
@@ -461,6 +550,6 @@ int main(int argc, char *argv[])
         }
     }
     //free(prog_name);
-    close(sockfd);
+    close(sockfd);*/
 
 }

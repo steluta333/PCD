@@ -35,6 +35,7 @@
 #define SQUARE_UNKNOWN  0 // the square has not been targeted yet
 #define SQUARE_HIT      1 // a shot at the square hit a ship
 #define SQUARE_EMPTY    2 // a shot at the square was a miss (thus it is empty)
+#define MAX_CLIENTS		30
 
 #include <stdint.h>
 
