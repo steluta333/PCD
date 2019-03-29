@@ -5,7 +5,7 @@
  *
  * @brief Server for OSUE exercise 1B `Battleship'.
  */
-
+ //trateaza ctrl+c
 
 // IO, C standard library, POSIX API, data types:
 #include <stdio.h>
@@ -195,9 +195,21 @@ int get_status(char buffer){
 }
 
 
+void sighandler(int signum) {
+	printf("Caught signal %d, coming out...\n", signum);
+	printf("Client stopped\n");	
+	shutdown (sockfd,2);
+	close(sockfd);
+	exit(1);
+}
+
+
+
 
 int main(int argc, char *argv[])
 {
+	signal(SIGPIPE, SIG_IGN);
+	signal(SIGINT, sighandler);
     parse_command_line(argc, argv);
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
@@ -228,24 +240,25 @@ int main(int argc, char *argv[])
     int bytes_read=0; // bytes read by the read function; error checking variable
     int hit=0;
     int rounds=0; //number of rounds played
-    while(status==0&& rounds<80){
+    while(status==0){
         rounds=rounds+1;
 
         buffer=pick_coordinates_to_hit(); //create buffer, pick coordinates
         //printf("Sent to server%d\n",buffer);
         bytes_written=write(sockfd,&buffer,sizeof(buffer));
-        if(bytes_written==-1){
-            fprintf(stderr,"Could not write in the socket\n");
+        if(bytes_written==-1 || bytes_written==0){
+            fprintf(stderr,"Could not write in the socket. Server was disconnected\n");
             exit(EXIT_FAILURE);
         }
         bytes_read=read(sockfd,&buffer,sizeof(buffer));
-        if(bytes_read==-1){
-            fprintf(stderr,"Could not read message from server\n");
+        if(bytes_read==-1 || bytes_read==0){
+            fprintf(stderr,"Could not read message from server. Server was disconnected\n");
             exit(EXIT_FAILURE);
         }
+	
         //printf("Received from server%d, round %d\n",buffer,rounds);
         status=get_status(buffer); // tells the client if the game is running/ error has occured/ game is over
-        //printf("status:%d\n", status);
+        printf("status:%d\n", status);
         hit=get_hit(buffer); //hit tells the client if a ship has been hit and also tells if it has been sunk.
         if(hit==0){
             game_matrix[line][colomn]=_NO_SHIP;
@@ -257,11 +270,12 @@ int main(int argc, char *argv[])
         //printf("hit:%d\n", hit);
     }
     //printf("Status at the end %d , hit %d\n",status,hit);
-    if(status==1 && hit==3){
+	
+    if(status==1 && hit==3 && rounds>10){
         printf("Game over.You have succesfully sunk all the ships in %d\n",rounds);
     }
     else if(status==1 ){
-        printf("Game over.Maximum number of rounds reached\n");
+        printf("Game over.Maximum number of rounds reached \n");
     }
     else if(status==2){
         fprintf(stderr,"Error: The last message contained an invalid parity bit\n");
@@ -269,6 +283,7 @@ int main(int argc, char *argv[])
     else if(status==3){
         printf("Error: The last message contained an invalid coordinate\n");
     }
+
     //free(prog_name);
     close(sockfd);
     return 0;

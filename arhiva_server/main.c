@@ -6,6 +6,8 @@
  * @brief Server for OSUE exercise 1B `Battleship'.
  */
 
+// trateaza ctrl+c
+//server admin
 // IO, C standard library, POSIX API, data types:
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,11 +37,18 @@
 #include <sys/time.h>
 #include <netdb.h>
 #include <fcntl.h>
+#include <sys/wait.h>
 
 // stuff shared by client and server:
 #include "common.h"
-//int remaining_moves[MAX_CLIENTS+1]; //how many moves the client i is still allowed to do
-
+int nready; //nr of sockets in list
+fd_set master,copy; //list of file descriptors for the socket
+int remaining_moves[MAX_CLIENTS]; //how many moves the client i did so far
+struct client_mapping { //maps the file descriptor of a client socket with a position in remaining_moves vector 
+	int fd_client;
+	int vector_poz;
+};
+struct client_mapping mapping[MAX_CLIENTS]; // vector of mappings between socket fd of client and position in remaining_moves
 int game_matrix[10][10];
 // Static variables for things you might want to access from several functions:
 static const char *port = DEFAULT_PORT; // the port to bind to
@@ -374,13 +383,66 @@ int check_parity(char a){
     return 0;
 }
 
+// checks if there is a free slot in the client list; returns the first position where we can store the client or MAX_CLIENTS if there is no such free slot
+int free_slot(){
+	for(int i=0; i<MAX_CLIENTS;i++){
+		if(mapping[i].fd_client ==-1 || mapping[i].fd_client == 0){
+			return i;
+		}
+	}
+	return MAX_CLIENTS;
+}
+
+int get_moves_poz(int fd){ // returns the position in vector of a certain fd
+	for(int i=0;i<MAX_CLIENTS;i++){
+		if(mapping[i].fd_client == fd){
+			return mapping[i].vector_poz;
+			
+		}
+	}
+	return -1;
+
+}
+
+void remove_from_memory(int fd){ 		//removes a client from mapping
+	for(int i=0; i<MAX_CLIENTS;i++){
+		if(mapping[i].fd_client ==fd){
+			mapping[i].fd_client=-1;
+			mapping[i].vector_poz=-1;
+		}
+	}
+
+}
+
+
+void sighandler(int signum) {
+	printf("Caught signal %d, coming out...\n", signum);
+	printf("Server stopped\n");	
+	char buffer;
+	for(int i = 0; i<=maxfd && nready>0; i++){ //iterate through file descriptors
+		if(i==sockfd){
+			continue;
+		}
+		
+		shutdown(i,SHUT_RDWR );
+		close(i);
+	}
+	shutdown (sockfd,SHUT_RDWR);
+	close(sockfd);
+	exit(1);
+}
+
 int main(int argc, char *argv[])
-{
+{	printf("Max clients%d\n", MAX_CLIENTS);	
+	signal(SIGPIPE, SIG_IGN);
+	signal(SIGINT, sighandler);
     char ship_positions[6][6]; // matrix where the coordinates will be saved;every row represents a ship coordinate
     parse_command_line(argc,argv,ship_positions);
     check_sintax_ship_coordinates(ship_positions);
     int ship_status[7]; //vector where we save how many squares a certain ship has (position 1 for the first ship and so on)
     populate_game_matrix(game_matrix,ship_positions,ship_status);
+	
+	
     //print_matrix(game_matrix);
     /*for(int i=0; i<6; i++){
         printf("%d",ship_status[i]);
@@ -426,12 +488,14 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 	int new;
-	int nready; //nr of sockets in list
-	fd_set master,copy; //list of file descriptors for the socket
+	
 	FD_ZERO(&master); //clears the master list
 	FD_ZERO(&copy);
 	FD_SET(sockfd, &master) ;//adds the server socket file descriptor to the list
 	maxfd = sockfd;
+
+	
+	
 	while(true){
 		memcpy(&copy, &master, sizeof(master));		// copy is "copy" the info from master
 		printf("running select()\n");
@@ -458,10 +522,23 @@ int main(int argc, char *argv[])
 							exit(EXIT_FAILURE);
 						}
 						FD_SET(new, &master); //add new descriptor in master list
-						if(maxfd<new){
+						if(maxfd<new){ //update the maximum file descriptor 
 							maxfd = new;
 						}
+						int client_poz = free_slot(); // gets the next position where we can store a client's moves
+						if(client_poz < MAX_CLIENTS ){ 
+							mapping[client_poz].fd_client = new;
+							mapping[client_poz].vector_poz = client_poz;
+							remaining_moves[client_poz] = 4; //maximum nr of moves in which a client can win the game 
+							
+						}
+						else{ // we close the client socket, because we can't manage it	
+							close(new);
+							FD_CLR(new, &master);
+							
+						}
 					}
+					
 					
 				}
 				else{
@@ -469,7 +546,7 @@ int main(int argc, char *argv[])
 					char buffer; //bufer where we write the messages and where we store the messages to send
     				int bytes_received=0; //will take the value of bits received by rcv()
     				int coordinates_sum; //line*10+colomn
-   					int hit;//hit tells the client if a ship has been hit and also tells if it has been sunk.
+   					int hit = 0;//hit tells the client if a ship has been hit and also tells if it has been sunk.
    					int status=0; //status 0=game running
 					bytes_received=recv(i,&buffer,1,0);
        				if(bytes_received==-1){
@@ -484,6 +561,16 @@ int main(int argc, char *argv[])
             			status=3;
         			}
         			hit=check_ship_hit(coordinates_sum,game_matrix,ship_status);
+					int moves_poz = get_moves_poz(i);
+					printf("Moves poz is %d for client %d\n", moves_poz,i);
+					if(moves_poz != -1){
+						if(remaining_moves[moves_poz] == 0){ // if the client has no moves left
+							status = 1;
+						}
+						remaining_moves[moves_poz]-=1;
+						printf("client %d has %d moves left\n", i,remaining_moves[moves_poz]);
+					}
+				
         			if(hit==3 ){ //adauga conditie pt nr maxim de mutari
             			status=1; // if the las ship was sunk, or it was the last round, status= game over
 						
@@ -492,12 +579,18 @@ int main(int argc, char *argv[])
         			//printf("Message to be sent by server %d\n",buffer);
        				int written_bits=write(i,&buffer,sizeof(buffer));
         			if(written_bits==-1){
-            			fprintf(stderr,"Could not write in the socket\n");
-            			exit(EXIT_FAILURE);
+            			fprintf(stderr,"Could not send message to client %d. Cliend %d disconnected \n",i, i);
+						close(i);
+						FD_CLR(i, &master);
+						remove_from_memory(i);
+
         			}
+					printf("status id %d\n",status);
+					fflush(stdout);
 					if(status == 1){
 						close(i);
 						FD_CLR(i, &master);
+						remove_from_memory(i);
 					}
 					
 				}
@@ -508,48 +601,5 @@ int main(int argc, char *argv[])
 	}	
 
 	return 0;
-   /* connfd = accept(sockfd, NULL, NULL);
-    if(connfd==-1){
-        fprintf(stderr,"Accepting error\n");
-        exit(EXIT_FAILURE);
-    }
-
-    char buffer; //bufer where we write the messages and where we store the messages to send
-    int bytes_received=0; //will take the value of bits received by rcv()
-    int coordinates_sum; //line*10+colomn
-    int hit;//hit tells the client if a ship has been hit and also tells if it has been sunk.
-    int status=0; //status 0=game running
-    for(int i=0; i<80; i++){
-        printf("Runda %d\n",i);
-        bytes_received=recv(connfd,&buffer,1,0);
-        if(bytes_received==-1){
-            fprintf(stderr,"Conection error\n");
-            exit(EXIT_FAILURE);
-        }
-        if(check_parity(buffer)==0){
-            status=2; // Error: The last message contained an invalid parity bit
-        }
-        coordinates_sum=check_valid_coordinates(buffer);
-        if(coordinates_sum==-1){ //3-Error: The last message contained an invalid coordinate
-            status=3;
-        }
-        hit=check_ship_hit(coordinates_sum,game_matrix,ship_status);
-        if(hit==3 || i==79){
-            status=1; // if the las ship was sunk, or it was the last round, status= game over
-        }
-        buffer=create_message_to_send(status,hit);
-        //printf("Message to be sent by server %d\n",buffer);
-        int written_bits=write(connfd,&buffer,sizeof(buffer));
-        if(written_bits==-1){
-            fprintf(stderr,"Could not write in the socket\n");
-            exit(EXIT_FAILURE);
-        }
-
-        if(status==1){ //we make sure that we go out of the loop if the status becomes 1 in the last step
-            break;
-        }
-    }
-    //free(prog_name);
-    close(sockfd);*/
 
 }
